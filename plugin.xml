@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin
+	xmlns="http://apache.org/cordova/ns/plugins/1.0"
+	xmlns:android="http://schemas.android.com/apk/res/android"
+        id="cordova-plugin-scanner-scale"
+        version="1.0.0">
+	<name>Cordova HTML Overlay</name>
+	<description>An HTML overlay plugin for Cordova.</description>
+	<license>MIT</license>
+	<asset src="www/ScannerScale.js" target="js/ScannerScale.js"/>
+	<js-module src="www/ScannerScale.js" name="ScannerScale">
+		<clobbers target="ScannerScale" />
+	</js-module>
+	<platform name="android">
+		<config-file target="res/xml/config.xml" parent="/*">
+			<feature name="ScannerScale">
+				<param name="android-package" value="scannerscale.cordova.ScannerScale"/>
+			</feature>
+		</config-file>
+		<lib-file src="src/android/libs/zebrascannerscalesdk.aar" />
+		<source-file src="src/android/ScannerScaleInterface.java" target-dir="src/com/curbngo/scannerscale" />
+		<source-file src="src/android/ScannerScale.java" target-dir="src/com/curbngo/scannerscale" />
+		<source-file src="src/android/Star.java" target-dir="src/com/curbngo/scannerscale" />
+		<source-file src="src/android/Zebra.java" target-dir="src/com/curbngo/scannerscale" />
+		<config-file parent="/manifest" target="AndroidManifest.xml">
+			<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+			<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+			<uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+			<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+			<uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>
+			<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+		</config-file>
+		<framework src="com.starmicronics:starmgsio:1.5.0" />
+		<framework src="androidx.appcompat:appcompat:1.0.3" />
+		<framework src="androidx.constraintlayout:constraintlayout:1.1.3" />
+	</platform>
+</plugin>
