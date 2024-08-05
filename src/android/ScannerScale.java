@@ -20,16 +20,20 @@ public class ScannerScale extends CordovaPlugin {
 
     private CallbackContext callback = null;
     private CallbackContext discoveryCallback = null;
-
+    
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
-        Log.e(LOG_TAG, "execute called "+action);
+        Log.e(LOG_TAG, "execute called " + action);
         if (action.equals("init")) {
             init(args.getString(0), callbackContext);
             return true;
         }
-        if(scannerScale == null){
-            callbackContext.error("init not called");
+        if (scannerScale == null) {
+            if ("isConnected".equals(action)){
+                callbackContext.success(0);
+                return true;
+            }
+            callbackContext.success("init not called");
             return false;
         }
         if ("startDiscovery".equals(action)) {
@@ -47,6 +51,16 @@ public class ScannerScale extends CordovaPlugin {
             return true;
         } else if ("isConnected".equals(action)) {
             scannerScale.isConnected(callbackContext);
+            return true;
+        } else if ("listen".equals(action)) {
+            scannerScale.listen(callbackContext);
+            return true;
+        } else if ("stopListening".equals(action)) {
+            scannerScale.stopListening(callbackContext);
+            return true;
+        } else if ("beep".equals(action)) {
+            int code = args.getInt(0);
+            scannerScale.beep(code, callbackContext);
             return true;
         }
         return false;
@@ -104,6 +118,12 @@ public class ScannerScale extends CordovaPlugin {
 
     protected void handleWeightUpdate(JSONObject weightJson) {
         PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, weightJson);
+        pluginResult.setKeepCallback(true);
+        sendUpdateToJavascript(pluginResult);
+    }
+
+    protected void handleBarcodeScan(JSONObject barcodeJson) {
+        PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, barcodeJson);
         pluginResult.setKeepCallback(true);
         sendUpdateToJavascript(pluginResult);
     }

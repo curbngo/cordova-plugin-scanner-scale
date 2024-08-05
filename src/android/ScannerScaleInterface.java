@@ -9,4 +9,7 @@ public interface ScannerScaleInterface {
     void connect(String id, CallbackContext callbackContext);
     void disconnect(CallbackContext callbackContext);
     void isConnected(CallbackContext callbackContext);
+    void listen(CallbackContext callbackContext);
+    void stopListening(CallbackContext callbackContext);
+    void beep(int code, CallbackContext callbackContext);
 }

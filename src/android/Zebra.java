@@ -3,6 +3,7 @@ package scannerscale.cordova;
 import android.annotation.SuppressLint;
 import android.content.res.Configuration;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -53,11 +54,14 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
 
     private SDKHandler sdkHandler;
     private int currentConnectedScannerID = -1;
-    private Handler handler = new Handler(Looper.getMainLooper());
+    private HandlerThread beepHandlerThread;
+    private Handler beepHandler;
+    private HandlerThread weightHandlerThread;
+    private Handler weightHandler;
     private Runnable weightRunnable;
     private Double lastWeight = null;
     private String lastUnit = null;
-    private boolean liveWeightEnable = true;
+    private volatile boolean listeningForWeight = false;
     private static final double TOLERANCE = 0.0001;
 
     private FrameLayout barcodeDisplayArea;
@@ -75,18 +79,30 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         Log.d(LOG_TAG, "Zebra initialized with ScannerScale.");
     }
 
-    @Override
+    private boolean isConnected() {
+        return currentConnectedScannerID > -1;
+    }
+
     public void isConnected(CallbackContext callbackContext) {
-        boolean isConnected = liveWeightEnable;
+        boolean isConnected = isConnected();
         Log.d(LOG_TAG, "isConnected called. Result: " + isConnected);
         callbackContext.success(isConnected ? 1 : 0);
     }
 
-    @Override
     public void initialize(CallbackContext callbackContext) {
         Log.d(LOG_TAG, "initialize called.");
         scannerScale.cordova.getActivity().runOnUiThread(() -> {
             if (sdkHandler == null) {
+
+                beepHandlerThread = new HandlerThread("BeepHandlerThread");
+                beepHandlerThread.start();
+                beepHandler = new Handler(beepHandlerThread.getLooper());
+
+                // Initialize handlers for weight reading
+                weightHandlerThread = new HandlerThread("WeightHandlerThread");
+                weightHandlerThread.start();
+                weightHandler = new Handler(weightHandlerThread.getLooper());
+
                 sdkHandler = new SDKHandler(scannerScale.cordova.getActivity().getApplicationContext(), true);
                 Log.d(LOG_TAG, "SDKHandler created.");
             }
@@ -106,33 +122,58 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         });
     }
 
-    @Override
     public void startDiscovery(CallbackContext callbackContext) {
         Log.d(LOG_TAG, "startDiscovery called. No operation needed.");
         callbackContext.success();
     }
 
-    @Override
     public void stopDiscovery(CallbackContext callbackContext) {
         Log.d(LOG_TAG, "stopDiscovery called. No operation needed.");
         callbackContext.success();
     }
 
-    @Override
     public void connect(String index, CallbackContext callbackContext) {
         Log.d(LOG_TAG, "connect called with index: " + index);
         connect(callbackContext);
     }
 
+    public void listen(CallbackContext callbackContext) {
+
+        if(!isConnected()){
+            callbackContext.error("Not connected to any scale");
+        }
+
+        scannerScale.cordova.getActivity().runOnUiThread(() -> {
+
+            if(!listeningForWeight){
+                listeningForWeight = true;
+                String inXml = "<inArgs><scannerID>" + currentConnectedScannerID + "</scannerID></inArgs>";
+                startWeightPolling(inXml, DCSSDKDefs.DCSSDK_COMMAND_OPCODE.DCSSDK_READ_WEIGHT);
+            }
+
+        });
+        callbackContext.success();
+    }
+
+    public void stopListening(CallbackContext callbackContext) {
+        if(listeningForWeight){
+            stopWeightPolling();
+        }
+        listeningForWeight = false;
+        scannerScale.clearCallback();
+        callbackContext.success();
+    }
+
     public void connect(CallbackContext callbackContext) {
         Log.d(LOG_TAG, "connect method called.");
-        scannerScale.clearCallback();
+        if(isConnected() && listeningForWeight){
+            stopWeightPolling();
+        }
         scannerScale.setCallback(callbackContext);
         scannerScale.cordova.getActivity().runOnUiThread(() -> {
             mScannerInfoList.clear();
             mSNAPIList.clear();
-            if(currentConnectedScannerID >= 0){
-                connectToScannerID(currentConnectedScannerID);
+            if(isConnected()){
                 PluginResult pluginResult = new PluginResult(PluginResult.Status.NO_RESULT);
                 pluginResult.setKeepCallback(true);
                 callbackContext.sendPluginResult(pluginResult);
@@ -153,7 +194,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
                 Log.d(LOG_TAG, "is active: "+mSNAPIList.get(0).isActive());
                 if (mSNAPIList.size() == 1 && mSNAPIList.get(0).isActive()) {
                     currentConnectedScannerID = mSNAPIList.get(0).getScannerID();
-                    connectToScannerID(currentConnectedScannerID);
                 } else {
                     for (DCSScannerInfo scanner : mSNAPIList) {
                         if (!scanner.isActive()) {
@@ -172,16 +212,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         });
     }
 
-    private void connectToScannerID(int id){
-        Log.d(LOG_TAG, "connectToScannerID: " + id);
-
-        if(id >= 0){
-            String inXml = "<inArgs><scannerID>" + currentConnectedScannerID + "</scannerID></inArgs>";
-            startWeightPolling(inXml, DCSSDKDefs.DCSSDK_COMMAND_OPCODE.DCSSDK_READ_WEIGHT);
-            return;
-        }
-    }
-
     private void connectToScanner(DCSScannerInfo scanner) {
         Log.d(LOG_TAG, "Connecting to scanner with ID: " + scanner.getScannerID());
         Callable<Boolean> callable = () -> {
@@ -189,7 +219,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
                             DCSSDKDefs.DCSSDK_RESULT.DCSSDK_RESULT_SUCCESS;
             if (result) {
                 currentConnectedScannerID = scanner.getScannerID();
-                connectToScannerID(currentConnectedScannerID);
                 Log.d(LOG_TAG, "Successfully connected to scanner ID: " + scanner.getScannerID());
             } else {
                 Log.e(LOG_TAG, "Failed to connect to scanner ID: " + scanner.getScannerID());
@@ -318,7 +347,7 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         if (sdkHandler != null) {
             sdkHandler.dcssdkTerminateCommunicationSession(currentConnectedScannerID);
             currentConnectedScannerID = -1;
-            liveWeightEnable = false;
+            listeningForWeight = false;
             scannerScale.clearCallback();
             Log.d(LOG_TAG, "Disconnected from scanner.");
         }
@@ -369,20 +398,20 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
                         }
 
                         // Polling interval
-                        handler.postDelayed(this, 1000); // 1 second
+                        weightHandler.postDelayed(this, 1000); // 1 second
                     }
                 }).start();
             }
         };
 
         // Start polling
-        handler.post(weightRunnable);
+        weightHandler.post(weightRunnable);
     }
 
     private void stopWeightPolling() {
         if (weightRunnable != null) {
-            handler.removeCallbacks(weightRunnable);
-            liveWeightEnable = false;
+            weightHandler.removeCallbacks(weightRunnable);
+            listeningForWeight = false;
         }
     }
 
@@ -490,6 +519,32 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         }
     }
 
+    public void beep(int code, CallbackContext callbackContext) {
+        if (!isConnected()) {
+            callbackContext.error("Not connected to any scale");
+            return;
+        }
+
+        final String inXml = "<inArgs><scannerID>" + currentConnectedScannerID + "</scannerID><cmdArgs><arg-int>" + code + "</arg-int></cmdArgs></inArgs>";
+        final DCSSDKDefs.DCSSDK_COMMAND_OPCODE opc = DCSSDKDefs.DCSSDK_COMMAND_OPCODE.DCSSDK_SET_ACTION;
+
+        Runnable beepRunnable = new Runnable() {
+            @Override
+            public void run() {
+                boolean result;
+                StringBuilder sbOutXml = new StringBuilder();
+                result = executeCommand(opc, inXml, sbOutXml, currentConnectedScannerID);
+                if (result) {
+                    Log.d(LOG_TAG, "Beeped " + sbOutXml.toString());
+                    callbackContext.success("Beeped");
+                } else {
+                    callbackContext.error("Failed to beep");
+                }
+            }
+        };
+        beepHandler.post(beepRunnable);
+    }
+
     @Override
     public void dcssdkEventScannerAppeared(DCSScannerInfo availableScanner) {
         Log.d(LOG_TAG, "dcssdkEventScannerAppeared called with scannerInfo: " + availableScanner.toString());
@@ -520,9 +575,16 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
 
     @Override
     public void dcssdkEventBarcode(byte[] barcodeData, int barcodeType, int fromScannerID) {
-        Log.d(LOG_TAG, "dcssdkEventBarcode called with barcodeType: " + barcodeType + ", fromScannerID: " + fromScannerID);
-        String barcode = new String(barcodeData);
-        updateUIOnBarcodeReceived(barcode);
+        Log.d(LOG_TAG, "dcssdkEventBarcode");
+        JSONObject result = new JSONObject();
+        try {
+            result.put("update_type", "barcode_scan");
+            result.put("type", getBarcodeTypeName(barcodeType));
+            result.put("barcode", new String(barcodeData));
+        } catch (JSONException e) {
+            Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
+        }
+        sendBarcodeScan(result);
     }
 
     @Override
@@ -575,10 +637,173 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         });
     }
 
-    private void updateUIOnBarcodeReceived(String barcode) {
-        Log.d(LOG_TAG, "updateUIOnBarcodeReceived called with barcode: " + barcode);
-        scannerScale.cordova.getActivity().runOnUiThread(() -> {
-            // Update UI for barcode received
-        });
+    private void sendBarcodeScan(JSONObject barcodeJson) {
+        Log.d(LOG_TAG, "sendBarcodeScan called");
+        if (scannerScale != null) {
+            scannerScale.handleBarcodeScan(barcodeJson);
+        }
+    }
+
+    private static String getBarcodeTypeName(int code) {
+        switch (code) {
+            case 1:
+                return "Code 39";
+            case 2:
+                return "Codabar";
+            case 3:
+                return "Code 128";
+            case 4:
+                return "Discrete (Standard) 2 of 5";
+            case 5:
+                return "IATA";
+            case 6:
+                return "Interleaved 2 of 5";
+            case 7:
+                return "Code 93";
+            case 8:
+                return "UPC-A";
+            case 9:
+                return "UPC-E0";
+            case 10:
+                return "EAN-8";
+            case 11:
+                return "EAN-13";
+            case 12:
+                return "Code 11";
+            case 13:
+                return "Code 49";
+            case 14:
+                return "MSI";
+            case 15:
+                return "EAN-128";
+            case 16:
+                return "UPC-E1";
+            case 17:
+                return "PDF-417";
+            case 18:
+                return "Code 16K";
+            case 19:
+                return "Code 39 Full ASCII";
+            case 20:
+                return "UPC-D";
+            case 21:
+                return "Code 39 Trioptic";
+            case 22:
+                return "Bookland";
+            case 23:
+                return "Coupon Code";
+            case 24:
+                return "NW-7";
+            case 25:
+                return "ISBT-128";
+            case 26:
+                return "Micro PDF";
+            case 27:
+                return "DataMatrix";
+            case 28:
+                return "QR Code";
+            case 29:
+                return "Micro PDF CCA";
+            case 30:
+                return "PostNet US";
+            case 31:
+                return "Planet Code";
+            case 32:
+                return "Code 32";
+            case 33:
+                return "ISBT-128 Con";
+            case 34:
+                return "Japan Postal";
+            case 35:
+                return "Australian Postal";
+            case 36:
+                return "Dutch Postal";
+            case 37:
+                return "MaxiCode";
+            case 38:
+                return "Canadian Postal";
+            case 39:
+                return "UK Postal";
+            case 40:
+                return "Macro PDF";
+            case 44:
+                return "Micro QR code";
+            case 45:
+                return "Aztec";
+            case 48:
+                return "GS1 Databar (RSS-14)";
+            case 49:
+                return "RSS Limited";
+            case 50:
+                return "GS1 Databar Expanded (RSS Expanded)";
+            case 55:
+                return "Scanlet";
+            case 72:
+                return "UPC-A + 2 Supplemental";
+            case 73:
+                return "UPC-E0 + 2 Supplemental";
+            case 74:
+                return "EAN-8 + 2 Supplemental";
+            case 75:
+                return "EAN-13 + 2 Supplemental";
+            case 80:
+                return "UPC-E1 + 2 Supplemental";
+            case 81:
+                return "CCA EAN-128";
+            case 82:
+                return "CCA EAN-13";
+            case 83:
+                return "CCA EAN-8";
+            case 84:
+                return "CCA RSS Expanded";
+            case 85:
+                return "CCA RSS Limited";
+            case 86:
+                return "CCA RSS-14";
+            case 87:
+                return "CCA UPC-A";
+            case 88:
+                return "CCA UPC-E";
+            case 89:
+                return "CCC EAN-128";
+            case 90:
+                return "TLC-39";
+            case 97:
+                return "CCB EAN-128";
+            case 98:
+                return "CCB EAN-13";
+            case 99:
+                return "CCB EAN-8";
+            case 100:
+                return "CCB RSS Expanded";
+            case 101:
+                return "CCB RSS Limited";
+            case 102:
+                return "CCB RSS-14";
+            case 103:
+                return "CCB UPC-A";
+            case 104:
+                return "CCB UPC-E";
+            case 105:
+                return "Signature Capture";
+            case 113:
+                return "Matrix 2 of 5";
+            case 114:
+                return "Chinese 2 of 5";
+            case 136:
+                return "UPC-A + 5 Supplemental";
+            case 137:
+                return "UPC-E0 + 5 Supplemental";
+            case 138:
+                return "EAN-8 + 5 Supplemental";
+            case 139:
+                return "EAN-13 + 5 Supplemental";
+            case 144:
+                return "UPC-E1 + 5 Supplemental";
+            case 154:
+                return "Macro Micro PDF";
+            default:
+                return "Unknown barcode type";
+        }
     }
 }

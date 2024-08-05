@@ -34,13 +34,19 @@ public class Star implements ScannerScaleInterface {
 
     private Double lastWeight = null;
     private String lastUnit = null;
+    private JSONObject lastScaleDataJson = null;
+    private volatile boolean listeningForWeight = false;
 
     public Star(ScannerScale scannerScale) {
         this.scannerScale = scannerScale;
     }
 
+    private boolean isConnected() {
+        return mScale != null;
+    }
+
     public void isConnected(CallbackContext callbackContext){
-        boolean isConnected = mScale != null;
+        boolean isConnected = isConnected();
         callbackContext.success(isConnected ? 1 : 0);
     }
 
@@ -104,11 +110,11 @@ public class Star implements ScannerScaleInterface {
                     pluginResult.setKeepCallback(true);
                     callbackContext.sendPluginResult(pluginResult);
                 } else {
-                    Log.d(LOG_TAG, "Starting device connection");
+                    Log.d(LOG_TAG, "Starting device connection to "+id);
                     ConnectionInfo connectionInfo = new ConnectionInfo.Builder()
                             .setBleInfo(id)
                             .build();
-
+                    StarDeviceManager mStarDeviceManager = new StarDeviceManager(scannerScale.cordova.getActivity());
                     mScale = mStarDeviceManager.createScale(connectionInfo);
 
                     mScale.connect(new ScaleCallback() {
@@ -119,6 +125,9 @@ public class Star implements ScannerScaleInterface {
                             sendConnectionUpdate(scale, status);
                             if (status == Scale.CONNECT_SUCCESS) {
                                 mScale.updateOutputConditionSetting(ScaleOutputConditionSetting.ContinuousOutputAtStableTimes);
+                            }
+                            if(listeningForWeight && lastScaleDataJson != null) {
+                                sendWeightUpdate(lastScaleDataJson);
                             }
                         }
 
@@ -131,10 +140,18 @@ public class Star implements ScannerScaleInterface {
                                 if (readScaleDataJson.has("weight") && readScaleDataJson.has("unit")) {
                                     double newWeight = readScaleDataJson.getDouble("weight");
                                     String newUnit = readScaleDataJson.getString("unit");
-                                    if (lastWeight == null || lastWeight != newWeight || !newUnit.equals(lastUnit)) {
+                                    if (lastWeight == null || !lastWeight.equals(newWeight) || !newUnit.equals(lastUnit)) {
                                         lastWeight = newWeight;
                                         lastUnit = newUnit;
-                                        sendWeightUpdate(readScaleDataJson);
+                                        lastScaleDataJson = readScaleDataJson;
+                                        if (listeningForWeight) {
+                                            sendWeightUpdate(readScaleDataJson);
+                                            Log.d(LOG_TAG, "listening for weight, sending update");
+                                        } else {
+                                            Log.d(LOG_TAG, "not listening for weight");
+                                        }
+                                    } else {
+                                        Log.d(LOG_TAG, "no change in weight " + readScaleDataJson.toString());
                                     }
                                 }
                             } catch (JSONException e) {
@@ -162,6 +179,27 @@ public class Star implements ScannerScaleInterface {
         if (mScale != null) {
             mScale.disconnect();
         }
+        callbackContext.success();
+    }
+
+    public void listen(CallbackContext callbackContext) {
+        if (!isConnected()) {
+            callbackContext.error("Not connected to any scale");
+            return;
+        }
+        listeningForWeight = true;
+        if (lastScaleDataJson != null) {
+            Log.d(LOG_TAG, " sending cached update " + lastScaleDataJson.toString());
+            sendWeightUpdate(lastScaleDataJson);
+        } else {
+            Log.d(LOG_TAG, "No cached update");
+        }
+        callbackContext.success();
+    }
+
+    public void stopListening(CallbackContext callbackContext) {
+        listeningForWeight = false;
+        scannerScale.clearCallback();
         callbackContext.success();
     }
 
@@ -284,5 +322,9 @@ public class Star implements ScannerScaleInterface {
         if (scannerScale != null) {
             scannerScale.handleWeightUpdate(weightJson);
         }
+    }
+
+    public void beep(int code, CallbackContext callbackContext) {
+        callbackContext.success();
     }
 }
