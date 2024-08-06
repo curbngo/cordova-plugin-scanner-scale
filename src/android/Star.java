@@ -260,7 +260,7 @@ public class Star implements ScannerScaleInterface {
             Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
         }
         if (scannerScale != null) {
-            scannerScale.handleConnectionUpdate(result);
+            scannerScale.handleGeneralUpdate(result);
         }
     }
 
@@ -298,7 +298,7 @@ public class Star implements ScannerScaleInterface {
             Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
         }
         if (scannerScale != null) {
-            scannerScale.handleDisconnectionUpdate(result);
+            scannerScale.handleGeneralUpdate(result);
         }
     }
 
@@ -320,7 +320,7 @@ public class Star implements ScannerScaleInterface {
 
     private void sendWeightUpdate(JSONObject weightJson) {
         if (scannerScale != null) {
-            scannerScale.handleWeightUpdate(weightJson);
+            scannerScale.handleGeneralUpdate(weightJson);
         }
     }
 

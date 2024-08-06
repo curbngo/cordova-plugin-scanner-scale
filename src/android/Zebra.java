@@ -12,7 +12,6 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
-import android.widget.Toast;
 import android.graphics.Point;
 
 import android.graphics.Bitmap;
@@ -54,25 +53,19 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
 
     private SDKHandler sdkHandler;
     private int currentConnectedScannerID = -1;
-    private HandlerThread beepHandlerThread;
-    private Handler beepHandler;
-    private HandlerThread weightHandlerThread;
-    private Handler weightHandler;
+    private HandlerThread handlerThread;
+    private Handler handler;
     private Runnable weightRunnable;
     private Double lastWeight = null;
     private String lastUnit = null;
     private volatile boolean listeningForWeight = false;
     private static final double TOLERANCE = 0.0001;
 
-    private FrameLayout barcodeDisplayArea;
-    private RelativeLayout snapiLayout;
-
     private ArrayList<DCSScannerInfo> mSNAPIList = new ArrayList<>();
     private ArrayList<DCSScannerInfo> mScannerInfoList = new ArrayList<>();
 
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private ScannerScale scannerScale;
-    DCSSDKDefs.DCSSDK_COMMAND_OPCODE opcode;
 
     public Zebra(ScannerScale scannerScale) {
         this.scannerScale = scannerScale;
@@ -90,18 +83,13 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
     }
 
     public void initialize(CallbackContext callbackContext) {
-        Log.d(LOG_TAG, "initialize called.");
         scannerScale.cordova.getActivity().runOnUiThread(() -> {
+            Log.d(LOG_TAG, "initialize called.");
             if (sdkHandler == null) {
 
-                beepHandlerThread = new HandlerThread("BeepHandlerThread");
-                beepHandlerThread.start();
-                beepHandler = new Handler(beepHandlerThread.getLooper());
-
-                // Initialize handlers for weight reading
-                weightHandlerThread = new HandlerThread("WeightHandlerThread");
-                weightHandlerThread.start();
-                weightHandler = new Handler(weightHandlerThread.getLooper());
+                handlerThread = new HandlerThread("handlerThread");
+                handlerThread.start();
+                handler = new Handler(handlerThread.getLooper());
 
                 sdkHandler = new SDKHandler(scannerScale.cordova.getActivity().getApplicationContext(), true);
                 Log.d(LOG_TAG, "SDKHandler created.");
@@ -118,8 +106,8 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
 
             sdkHandler.dcssdkSubsribeForEvents(notificationsMask);
             Log.d(LOG_TAG, "SDKHandler subscribed for events with mask: " + notificationsMask);
-            callbackContext.success();
         });
+        callbackContext.success();
     }
 
     public void startDiscovery(CallbackContext callbackContext) {
@@ -144,13 +132,59 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         }
 
         scannerScale.cordova.getActivity().runOnUiThread(() -> {
+            stopWeightPolling();
 
             if(!listeningForWeight){
                 listeningForWeight = true;
                 String inXml = "<inArgs><scannerID>" + currentConnectedScannerID + "</scannerID></inArgs>";
-                startWeightPolling(inXml, DCSSDKDefs.DCSSDK_COMMAND_OPCODE.DCSSDK_READ_WEIGHT);
-            }
+                weightRunnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        StringBuilder sbOutXml = new StringBuilder();
+                        boolean result = executeCommand(DCSSDKDefs.DCSSDK_COMMAND_OPCODE.DCSSDK_READ_WEIGHT, inXml, sbOutXml, currentConnectedScannerID);
+                        if (result) {
+                            try {
+                                JSONObject readScaleDataJson = getWeightInfo(sbOutXml.toString());
+                                Log.d(LOG_TAG, "readScaleDataJson IS: "+readScaleDataJson.toString());
+                                readScaleDataJson.put("update_type", "weight_update");
 
+                                if (readScaleDataJson.has("weight") && readScaleDataJson.has("unit")) {
+                                    Double newWeight = readScaleDataJson.getDouble("weight");
+                                    String newUnit = readScaleDataJson.getString("unit");
+
+                                    boolean weightChanged = lastWeight == null || Math.abs(lastWeight - newWeight) > TOLERANCE;
+                                    boolean unitChanged = !newUnit.equals(lastUnit);
+
+                                    
+                                    if (weightChanged || unitChanged) {
+                                        Log.d(LOG_TAG, "newWeight IS: "+newWeight.toString());
+                                        if(lastWeight != null){
+                                            Log.d(LOG_TAG, "lastWeight IS: "+lastWeight.toString());
+                                        }
+                                        Log.d(LOG_TAG, "newUnit IS: "+newUnit);
+                                        if(lastUnit != null){
+                                            Log.d(LOG_TAG, "lastUnit IS: "+lastUnit);
+                                        }
+                                        lastWeight = newWeight;
+                                        lastUnit = newUnit;
+                                        sendWeightUpdate(readScaleDataJson);
+                                    } else {
+                                        Log.d(LOG_TAG, "No change in weight");
+                                    }
+                                }
+                            } catch (JSONException e) {
+                                Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
+                            }
+
+                            // Polling interval
+                            handler.postDelayed(this, 1000); // 1 second
+                        }
+                    }
+                };
+
+                // Start polling
+                handler.post(weightRunnable);
+            }
         });
         callbackContext.success();
     }
@@ -160,7 +194,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
             stopWeightPolling();
         }
         listeningForWeight = false;
-        scannerScale.clearCallback();
         callbackContext.success();
     }
 
@@ -232,9 +265,7 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
             if (result) {
                 sendConnectionUpdate(scanner, !scanner.isActive());
             } else {
-                scannerScale.cordova.getActivity().runOnUiThread(() -> 
-                    Toast.makeText(scannerScale.cordova.getActivity(), "Failed to connect to scanner", Toast.LENGTH_SHORT).show()
-                );
+                Log.e(LOG_TAG, "Failed to connect to scanner");
             }
         } catch (InterruptedException | ExecutionException e) {
             Log.e(LOG_TAG, "Error connecting to scanner", e);
@@ -243,102 +274,42 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
 
     private void getSnapiBarcode() {
         Log.d(LOG_TAG, "Getting SNAPI barcode.");
-
-        scannerScale.cordova.getActivity().runOnUiThread(() -> {
-            BarCodeView barCodeView = sdkHandler.dcssdkGetUSBSNAPIWithImagingBarcode();
-            if (barCodeView == null) {
-                Log.e(LOG_TAG, "Failed to retrieve BarCodeView.");
-                return;
-            }
-
-            // Check if BarCodeView has valid dimensions
-            if (barCodeView.getWidth() <= 0 || barCodeView.getHeight() <= 0) {
-                // Use ViewTreeObserver to ensure BarCodeView is laid out properly
-                barCodeView.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-                    @Override
-                    public void onGlobalLayout() {
-                        barCodeView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-                        String base64Image = convertBarCodeViewToBase64(barCodeView);
-                        if (base64Image != null) {
-                            JSONObject result = new JSONObject();
-                            try {
-                                result.put("update_type", "connection_update");
-                                result.put("bitmap_url", "data:image/png;base64," + base64Image);
-                            } catch (JSONException e) {
-                                Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
-                            }
-                            scannerScale.handleConnectionUpdate(result);
-                        }
-                    }
-                });
-            } else {
-                // BarCodeView is already laid out
-                String base64Image = convertBarCodeViewToBase64(barCodeView);
-                if (base64Image != null) {
-                    JSONObject result = new JSONObject();
-                    try {
-                        result.put("update_type", "connection_update");
-                        result.put("bitmap_url", "data:image/png;base64," + base64Image);
-                    } catch (JSONException e) {
-                        Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
-                    }
-                    scannerScale.handleConnectionUpdate(result);
-                }
-            }
-        });
-    }
-
-    private String convertBarCodeViewToBase64(BarCodeView barCodeView) {
-        Log.d(LOG_TAG, "Converting BarCodeView to Base64.");
-
-        // Create a bitmap from BarCodeView
-        int width = barCodeView.getWidth();
-        int height = barCodeView.getHeight();
-
-        if (width <= 0 || height <= 0) {
-            Log.e(LOG_TAG, "Invalid BarCodeView dimensions: width=" + width + ", height=" + height);
-            return null;
-        }
-
+        BarCodeView barCodeView = sdkHandler.dcssdkGetUSBSNAPIWithImagingBarcode();
+        int width = 500;
+        int height = 500;
+        barCodeView.setSize(width,height);
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         barCodeView.draw(canvas);
+        String base64String = convertBitmapToBase64(bitmap);
+        sendBarcodeToJavaScript(base64String);
+    }
 
-        // Convert bitmap to Base64
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos);
-            byte[] byteArray = baos.toByteArray();
-            return Base64.encodeToString(byteArray, Base64.DEFAULT);
-        } catch (IOException e) {
-            Log.e(LOG_TAG, "IOException occurred while converting bitmap to Base64: " + e.getMessage(), e);
-            return null;
+    private String convertBitmapToBase64(Bitmap bitmap) {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream);
+        byte[] byteArray = byteArrayOutputStream.toByteArray();
+        return Base64.encodeToString(byteArray, Base64.NO_WRAP);
+    }
+
+    private void sendBarcodeToJavaScript(String base64String) {
+        JSONObject result = new JSONObject();
+        try {
+            result.put("update_type", "pairing_barcode");
+            result.put("barcode", base64String);
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+        if (scannerScale != null) {
+            scannerScale.handleGeneralUpdate(result);
         }
     }
-    
-    private double getDeviceScreenSize() {
-        Log.d(LOG_TAG, "Calculating device screen size.");
-        double screenInches = 0;
-        WindowManager windowManager = scannerScale.cordova.getActivity().getWindowManager();
-        Display display = windowManager.getDefaultDisplay();
 
-        int mWidthPixels;
-        int mHeightPixels;
-
-        try {
-            Point realSize = new Point();
-            Display.class.getMethod("getRealSize", Point.class).invoke(display, realSize);
-            mWidthPixels = realSize.x;
-            mHeightPixels = realSize.y;
-            DisplayMetrics dm = new DisplayMetrics();
-            display.getMetrics(dm);
-            double x = Math.pow(mWidthPixels / dm.xdpi, 2);
-            double y = Math.pow(mHeightPixels / dm.ydpi, 2);
-            screenInches = Math.sqrt(x + y);
-            Log.d(LOG_TAG, "Device screen size calculated: " + screenInches + " inches.");
-        } catch (Exception e) {
-            Log.e(LOG_TAG, "Error calculating screen size", e);
+    private void sendBarcodeScan(JSONObject barcodeJson) {
+        Log.d(LOG_TAG, "sendBarcodeScan called");
+        if (scannerScale != null) {
+            scannerScale.handleGeneralUpdate(barcodeJson);
         }
-        return screenInches;
     }
 
     @Override
@@ -354,65 +325,11 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         callbackContext.success();
     }
 
-    private void startWeightPolling(final String inXml, final DCSSDKDefs.DCSSDK_COMMAND_OPCODE opcode) {
-        weightRunnable = new Runnable() {
-            @Override
-            public void run() {
-                new Thread(() -> {
-                    boolean result;
-                    StringBuilder sbOutXml = new StringBuilder();
-                    result = executeCommand(opcode, inXml, sbOutXml, currentConnectedScannerID);
-
-                    if (opcode == DCSSDKDefs.DCSSDK_COMMAND_OPCODE.DCSSDK_READ_WEIGHT && result) {
-                        try {
-                            JSONObject readScaleDataJson = getWeightInfo(sbOutXml.toString());
-                            Log.d(LOG_TAG, "readScaleDataJson IS: "+readScaleDataJson.toString());
-                            readScaleDataJson.put("update_type", "weight_update");
-
-                            if (readScaleDataJson.has("weight") && readScaleDataJson.has("unit")) {
-                                Double newWeight = readScaleDataJson.getDouble("weight");
-                                String newUnit = readScaleDataJson.getString("unit");
-
-                                boolean weightChanged = lastWeight == null || Math.abs(lastWeight - newWeight) > TOLERANCE;
-                                boolean unitChanged = !newUnit.equals(lastUnit);
-
-                                
-                                if (weightChanged || unitChanged) {
-                                    Log.d(LOG_TAG, "newWeight IS: "+newWeight.toString());
-                                    if(lastWeight != null){
-                                        Log.d(LOG_TAG, "lastWeight IS: "+lastWeight.toString());
-                                    }
-                                    Log.d(LOG_TAG, "newUnit IS: "+newUnit);
-                                    if(lastUnit != null){
-                                        Log.d(LOG_TAG, "lastUnit IS: "+lastUnit);
-                                    }
-                                    lastWeight = newWeight;
-                                    lastUnit = newUnit;
-                                    sendWeightUpdate(readScaleDataJson);
-                                } else {
-                                    Log.d(LOG_TAG, "No change in weight");
-                                }
-                            }
-                        } catch (JSONException e) {
-                            Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
-                        }
-
-                        // Polling interval
-                        weightHandler.postDelayed(this, 1000); // 1 second
-                    }
-                }).start();
-            }
-        };
-
-        // Start polling
-        weightHandler.post(weightRunnable);
-    }
-
     private void stopWeightPolling() {
         if (weightRunnable != null) {
-            weightHandler.removeCallbacks(weightRunnable);
-            listeningForWeight = false;
+            handler.removeCallbacks(weightRunnable);
         }
+        listeningForWeight = false;
     }
 
     private String getScaleStatus(int status) {
@@ -495,7 +412,7 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
     private void sendWeightUpdate(JSONObject weightJson) {
         Log.d(LOG_TAG, "sendWeightUpdate called with JSON: " + weightJson.toString());
         if (scannerScale != null) {
-            scannerScale.handleWeightUpdate(weightJson);
+            scannerScale.handleGeneralUpdate(weightJson);
         }
     }
 
@@ -515,34 +432,8 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
             Log.e(LOG_TAG, "Error creating connection update JSON", e);
         }
         if (scannerScale != null) {
-            scannerScale.handleConnectionUpdate(result);
+            scannerScale.handleGeneralUpdate(result);
         }
-    }
-
-    public void beep(int code, CallbackContext callbackContext) {
-        if (!isConnected()) {
-            callbackContext.error("Not connected to any scale");
-            return;
-        }
-
-        final String inXml = "<inArgs><scannerID>" + currentConnectedScannerID + "</scannerID><cmdArgs><arg-int>" + code + "</arg-int></cmdArgs></inArgs>";
-        final DCSSDKDefs.DCSSDK_COMMAND_OPCODE opc = DCSSDKDefs.DCSSDK_COMMAND_OPCODE.DCSSDK_SET_ACTION;
-
-        Runnable beepRunnable = new Runnable() {
-            @Override
-            public void run() {
-                boolean result;
-                StringBuilder sbOutXml = new StringBuilder();
-                result = executeCommand(opc, inXml, sbOutXml, currentConnectedScannerID);
-                if (result) {
-                    Log.d(LOG_TAG, "Beeped " + sbOutXml.toString());
-                    callbackContext.success("Beeped");
-                } else {
-                    callbackContext.error("Failed to beep");
-                }
-            }
-        };
-        beepHandler.post(beepRunnable);
     }
 
     @Override
@@ -561,7 +452,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
     public void dcssdkEventCommunicationSessionEstablished(DCSScannerInfo activeScanner) {
         Log.d(LOG_TAG, "dcssdkEventCommunicationSessionEstablished called with scannerInfo: " + activeScanner.toString());
         currentConnectedScannerID = activeScanner.getScannerID();
-        updateUIOnSessionEstablished();
     }
 
     @Override
@@ -569,8 +459,8 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         Log.d(LOG_TAG, "dcssdkEventCommunicationSessionTerminated called with scannerID: " + scannerID);
         if (currentConnectedScannerID == scannerID) {
             currentConnectedScannerID = -1;
+            listeningForWeight = false;
         }
-        updateUIOnSessionTerminated();
     }
 
     @Override
@@ -621,27 +511,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
     public void dcssdkEventBinaryData(byte[] binaryData, int fromScannerID) {
         Log.d(LOG_TAG, "dcssdkEventBinaryData called with fromScannerID: " + fromScannerID);
         // Handle binary data event if required
-    }
-
-    private void updateUIOnSessionEstablished() {
-        Log.d(LOG_TAG, "updateUIOnSessionEstablished called.");
-        scannerScale.cordova.getActivity().runOnUiThread(() -> {
-            // Update UI for session establishment
-        });
-    }
-
-    private void updateUIOnSessionTerminated() {
-        Log.d(LOG_TAG, "updateUIOnSessionTerminated called.");
-        scannerScale.cordova.getActivity().runOnUiThread(() -> {
-            // Update UI for session termination
-        });
-    }
-
-    private void sendBarcodeScan(JSONObject barcodeJson) {
-        Log.d(LOG_TAG, "sendBarcodeScan called");
-        if (scannerScale != null) {
-            scannerScale.handleBarcodeScan(barcodeJson);
-        }
     }
 
     private static String getBarcodeTypeName(int code) {

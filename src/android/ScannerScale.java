@@ -58,10 +58,6 @@ public class ScannerScale extends CordovaPlugin {
         } else if ("stopListening".equals(action)) {
             scannerScale.stopListening(callbackContext);
             return true;
-        } else if ("beep".equals(action)) {
-            int code = args.getInt(0);
-            scannerScale.beep(code, callbackContext);
-            return true;
         }
         return false;
     }
@@ -104,26 +100,8 @@ public class ScannerScale extends CordovaPlugin {
         }
     }
 
-    protected void handleConnectionUpdate(JSONObject result) {
+    protected void handleGeneralUpdate(JSONObject result) {
         PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, result);
-        pluginResult.setKeepCallback(true);
-        sendUpdateToJavascript(pluginResult);
-    }
-
-    protected void handleDisconnectionUpdate(JSONObject result) {
-        PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, result);
-        pluginResult.setKeepCallback(true);
-        sendUpdateToJavascript(pluginResult);
-    }
-
-    protected void handleWeightUpdate(JSONObject weightJson) {
-        PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, weightJson);
-        pluginResult.setKeepCallback(true);
-        sendUpdateToJavascript(pluginResult);
-    }
-
-    protected void handleBarcodeScan(JSONObject barcodeJson) {
-        PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, barcodeJson);
         pluginResult.setKeepCallback(true);
         sendUpdateToJavascript(pluginResult);
     }

@@ -38,11 +38,6 @@ var ScannerScale = {
     // Stop listening for live updates from the scale
     stopListening: function(successCallback, errorCallback) {
         cordova.exec(successCallback, errorCallback, 'ScannerScale', 'stopListening', []);
-    },
-
-    // Make the scale beep
-    beep: function(code, successCallback, errorCallback) {
-        cordova.exec(successCallback, errorCallback, 'ScannerScale', 'beep', [code]);
     }
 };
 

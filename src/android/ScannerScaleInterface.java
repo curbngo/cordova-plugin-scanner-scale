@@ -11,5 +11,4 @@ public interface ScannerScaleInterface {
     void isConnected(CallbackContext callbackContext);
     void listen(CallbackContext callbackContext);
     void stopListening(CallbackContext callbackContext);
-    void beep(int code, CallbackContext callbackContext);
 }
