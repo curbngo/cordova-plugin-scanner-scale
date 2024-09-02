@@ -63,13 +63,19 @@ public class ScannerScale extends CordovaPlugin {
     }
 
     private void init(String scaleType, CallbackContext callbackContext) {
-        if ("Star".equals(scaleType)) {
-            scannerScale = new Star(this); // Pass 'this' to provide ScannerScale instance
-        } else if ("Zebra".equals(scaleType)) {
-            scannerScale = new Zebra(this); // Pass 'this' to provide ScannerScale instance
-        } else {
-            callbackContext.error("Unsupported scanner type: " + scaleType);
-            return;
+        if (
+            scannerScale == null || 
+            (scannerScale instanceof Star && !"Star".equals(scaleType)) || 
+            (scannerScale instanceof Zebra && !"Zebra".equals(scaleType))
+        ){
+            if ("Star".equals(scaleType)) {
+                scannerScale = new Star(this);
+            } else if ("Zebra".equals(scaleType)) {
+                scannerScale = new Zebra(this);
+            } else {
+                callbackContext.error("Unsupported scanner type: " + scaleType);
+                return;
+            }
         }
         scannerScale.initialize(callbackContext);
     }
