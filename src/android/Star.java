@@ -30,35 +30,33 @@ public class Star implements ScannerScaleInterface {
 
     private StarDeviceManager mStarDeviceManager;
     private Scale mScale;
+    private boolean mScaleIsConnected;
     private ScannerScale scannerScale;
 
     private Double lastWeight = null;
     private String lastUnit = null;
     private JSONObject lastScaleDataJson = null;
     private volatile boolean listeningForWeight = false;
+    private static final int CONNECTION_TIMEOUT_MS = 10000;
 
     public Star(ScannerScale scannerScale) {
         this.scannerScale = scannerScale;
         Log.d(LOG_TAG, "Star instance created: " + this);
     }
 
-    private boolean isConnected() {
-        return mScale != null;
+    public boolean isConnected() {
+        return mScale != null && mScaleIsConnected;
     }
 
-    public void isConnected(CallbackContext callbackContext){
-        boolean isConnected = isConnected();
-        callbackContext.success(isConnected ? 1 : 0);
+    public boolean isConnected(CallbackContext callbackContext){
+        return isConnected();
     }
-
-    public void initialize(CallbackContext callbackContext) {
-        callbackContext.success();
-    }
+    
+    public void initialize(CallbackContext callbackContext) {}
 
     public void startDiscovery(CallbackContext callbackContext) {
         Log.d(LOG_TAG, "discover");
         stopDiscovery();
-        scannerScale.setDiscoveryCallback(callbackContext);
         scannerScale.cordova.getActivity().runOnUiThread(new Runnable() {
             public void run() {
                 Log.d(LOG_TAG, "discover on UI thread");
@@ -74,19 +72,16 @@ public class Star implements ScannerScaleInterface {
                         } catch (JSONException e) {
                             Log.e(LOG_TAG, e.getMessage(), e);
                         }
-                        scannerScale.sendDiscoveryUpdate(jsonInfo, true);
+                        scannerScale.broadcastEvent(jsonInfo);
                     }
                 });
-                PluginResult pluginResult = new PluginResult(PluginResult.Status.NO_RESULT);
-                pluginResult.setKeepCallback(true);
-                callbackContext.sendPluginResult(pluginResult);
+                callbackContext.success();
             }
         });
     }
 
     public void stopDiscovery() {
         Log.d(LOG_TAG, "stopDiscovery");
-        scannerScale.clearDiscoveryCallback();
         if (mStarDeviceManager != null) {
             mStarDeviceManager.stopScan();
         }
@@ -94,47 +89,58 @@ public class Star implements ScannerScaleInterface {
 
     public void stopDiscovery(CallbackContext callbackContext) {
         Log.d(LOG_TAG, "stopDiscovery with callback");
-        scannerScale.clearDiscoveryCallback();
         if (mStarDeviceManager != null) {
             mStarDeviceManager.stopScan();
         }
         callbackContext.success();
     }
 
-    public void connect(String id, final CallbackContext callbackContext) {
+    public void connect(final String id, final CallbackContext callbackContext) {
         Log.d(LOG_TAG, "connect");
-        scannerScale.setCallback(callbackContext);
         scannerScale.cordova.getActivity().runOnUiThread(new Runnable() {
             public void run() {
                 Log.d(LOG_TAG, "connect on UI thread");
-                if (mScale != null) {
-                    Log.d(LOG_TAG, "Scale already connected. Exiting.");
-                    PluginResult pluginResult = new PluginResult(PluginResult.Status.NO_RESULT);
-                    pluginResult.setKeepCallback(true);
-                    callbackContext.sendPluginResult(pluginResult);
+                if (isConnected()) {
+                    Log.d(LOG_TAG, "Scale already connected");
+                    callbackContext.success();
                 } else {
                     Log.d(LOG_TAG, "Starting device connection to " + id);
                     ConnectionInfo connectionInfo = new ConnectionInfo.Builder()
                             .setBleInfo(id)
                             .build();
 
-                    // Reuse the existing StarDeviceManager instance if it exists
                     if (mStarDeviceManager == null) {
                         mStarDeviceManager = new StarDeviceManager(scannerScale.cordova.getActivity(), StarDeviceManager.InterfaceType.BluetoothLowEnergy);
                     }
                     mScale = mStarDeviceManager.createScale(connectionInfo);
 
+                    final Handler timeoutHandler = new Handler();
+                    final Runnable timeoutRunnable = new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!mScaleIsConnected) {
+                                Log.d(LOG_TAG, "Connection timeout. Failing callback.");
+                                callbackContext.error("Connection timeout.");
+                            }
+                        }
+                    };
+
+                    timeoutHandler.postDelayed(timeoutRunnable, CONNECTION_TIMEOUT_MS);
+
+                    mScaleIsConnected = false;
                     mScale.connect(new ScaleCallback() {
                         @Override
                         public void onConnect(Scale scale, int status) {
                             Log.d(LOG_TAG, "ScaleCallback onConnect");
+                            timeoutHandler.removeCallbacks(timeoutRunnable);
                             stopDiscovery();
-                            sendConnectionUpdate(scale, status);
                             if (status == Scale.CONNECT_SUCCESS) {
+                                mScaleIsConnected = true;
                                 mScale.updateOutputConditionSetting(ScaleOutputConditionSetting.ContinuousOutputAtStableTimes);
-                            }
-                            if (listeningForWeight && lastScaleDataJson != null) {
-                                sendWeightUpdate(lastScaleDataJson);
+                                Log.d(LOG_TAG, "Connection successful, sending success callback.");
+                                callbackContext.success();
+                            } else {
+                                callbackContext.error("Connection failed with status: " + getConnectionStatus(status));
                             }
                         }
 
@@ -147,12 +153,10 @@ public class Star implements ScannerScaleInterface {
                         public void onDisconnect(Scale scale, int status) {
                             Log.d(LOG_TAG, "ScaleCallback onDisconnect");
                             mScale = null;
+                            mScaleIsConnected = false;
                             sendDisconnectionUpdate(scale, status);
                         }
                     });
-                    PluginResult pluginResult = new PluginResult(PluginResult.Status.NO_RESULT);
-                    pluginResult.setKeepCallback(true);
-                    callbackContext.sendPluginResult(pluginResult);
                 }
             }
         });
@@ -162,7 +166,6 @@ public class Star implements ScannerScaleInterface {
         JSONObject readScaleDataJson = getWeightInfo(scaleData);
         Log.d(LOG_TAG, "ScaleCallback onReadScaleData " + readScaleDataJson.toString());
         try {
-            readScaleDataJson.put("update_type", "weight_update");
             if (readScaleDataJson.has("weight") && readScaleDataJson.has("unit")) {
                 double newWeight = readScaleDataJson.getDouble("weight");
                 String newUnit = readScaleDataJson.getString("unit");
@@ -189,9 +192,10 @@ public class Star implements ScannerScaleInterface {
 
     public void disconnect(CallbackContext callbackContext) {
         Log.d(LOG_TAG, "disconnect");
-        if (mScale != null) {
-            mScale.disconnect();
+        if (isConnected()) {
+            mScale.disconnect(); 
         }
+        mScaleIsConnected = false;
         callbackContext.success();
     }
 
@@ -201,6 +205,7 @@ public class Star implements ScannerScaleInterface {
             return;
         }
         listeningForWeight = true;
+        Log.d(LOG_TAG, "starting to listen" + lastScaleDataJson.toString());
         if (lastScaleDataJson != null) {
             Log.d(LOG_TAG, " sending cached update " + lastScaleDataJson.toString());
             sendWeightUpdate(lastScaleDataJson);
@@ -229,50 +234,31 @@ public class Star implements ScannerScaleInterface {
         return obj;
     }
 
-    private void sendConnectionUpdate(Scale scale, int status) {
-        Log.d(LOG_TAG, "sendConnectionUpdate");
-        JSONObject result = new JSONObject();
-        try {
-            result.put("update_type", "connection_update");
-            switch (status) {
-                case Scale.CONNECT_SUCCESS:
-                    result.put("status", "success");
-                    break;
+    private String getConnectionStatus(int status) {
+        switch (status) {
+            case Scale.CONNECT_SUCCESS:
+                return "success";
 
-                case Scale.CONNECT_NOT_AVAILABLE:
-                    result.put("status", "not_available");
-                    break;
+            case Scale.CONNECT_NOT_AVAILABLE:
+                return "not_available";
 
-                case Scale.CONNECT_ALREADY_CONNECTED:
-                    result.put("status", "already_connected");
-                    break;
+            case Scale.CONNECT_ALREADY_CONNECTED:
+                return "already_connected";
 
-                case Scale.CONNECT_TIMEOUT:
-                    result.put("status", "timeout");
-                    break;
+            case Scale.CONNECT_TIMEOUT:
+                return "timeout";
 
-                case Scale.CONNECT_READ_WRITE_ERROR:
-                    result.put("status", "read_write_error");
-                    break;
+            case Scale.CONNECT_READ_WRITE_ERROR:
+                return "read_write_error";
 
-                case Scale.CONNECT_NOT_SUPPORTED:
-                    result.put("status", "not_supported");
-                    break;
+            case Scale.CONNECT_NOT_SUPPORTED:
+                return "not_supported";
 
-                case Scale.CONNECT_NOT_GRANTED_PERMISSION:
-                    result.put("status", "not_granted_permission");
-                    break;
+            case Scale.CONNECT_NOT_GRANTED_PERMISSION:
+                return "not_granted_permission";
 
-                default:
-                case Scale.CONNECT_UNEXPECTED_ERROR:
-                    result.put("status", "unexpected_error");
-                    break;
-            }
-        } catch (JSONException e) {
-            Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
-        }
-        if (scannerScale != null) {
-            scannerScale.handleGeneralUpdate(result);
+            default:
+                return "unexpected_error";
         }
     }
 
@@ -280,7 +266,7 @@ public class Star implements ScannerScaleInterface {
         Log.d(LOG_TAG, "sendDisconnectionUpdate");
         JSONObject result = new JSONObject();
         try {
-            result.put("update_type", "disconnection_update");
+            result.put("update_type", "disconnection");
             switch (status) {
                 case Scale.DISCONNECT_SUCCESS:
                     result.put("status", "success");
@@ -310,7 +296,7 @@ public class Star implements ScannerScaleInterface {
             Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
         }
         if (scannerScale != null) {
-            scannerScale.handleGeneralUpdate(result);
+            scannerScale.broadcastEvent(result);
         }
     }
 
@@ -332,7 +318,13 @@ public class Star implements ScannerScaleInterface {
 
     private void sendWeightUpdate(JSONObject weightJson) {
         if (scannerScale != null) {
-            scannerScale.handleGeneralUpdate(weightJson);
+            try {
+                weightJson.put("update_type", "weight_update");
+            } catch (JSONException e) {
+                Log.e(LOG_TAG, "JSONException occurred: " + e.getMessage(), e);
+                return;
+            }
+            scannerScale.broadcastEvent(weightJson);
         }
     }
 

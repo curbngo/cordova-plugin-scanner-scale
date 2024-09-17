@@ -19,7 +19,6 @@ public class ScannerScale extends CordovaPlugin {
     private ScannerScaleInterface scannerScale = null;
 
     private CallbackContext callback = null;
-    private CallbackContext discoveryCallback = null;
     
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
@@ -33,7 +32,6 @@ public class ScannerScale extends CordovaPlugin {
                 callbackContext.success(0);
                 return true;
             }
-            callbackContext.success("init not called");
             return false;
         }
         if ("startDiscovery".equals(action)) {
@@ -50,7 +48,7 @@ public class ScannerScale extends CordovaPlugin {
             scannerScale.disconnect(callbackContext);
             return true;
         } else if ("isConnected".equals(action)) {
-            scannerScale.isConnected(callbackContext);
+            callbackContext.success(scannerScale.isConnected() ? 1 : 0);
             return true;
         } else if ("listen".equals(action)) {
             scannerScale.listen(callbackContext);
@@ -67,7 +65,7 @@ public class ScannerScale extends CordovaPlugin {
             scannerScale == null || 
             (scannerScale instanceof Star && !"Star".equals(scaleType)) || 
             (scannerScale instanceof Zebra && !"Zebra".equals(scaleType))
-        ){
+        ) {
             if ("Star".equals(scaleType)) {
                 scannerScale = new Star(this);
             } else if ("Zebra".equals(scaleType)) {
@@ -77,44 +75,25 @@ public class ScannerScale extends CordovaPlugin {
                 return;
             }
         }
+
+        // Initialize the scannerScale
         scannerScale.initialize(callbackContext);
-    }
-
-
-    protected void setCallback(CallbackContext callbackContext) {
         this.callback = callbackContext;
-    }
 
-    protected void setDiscoveryCallback(CallbackContext callbackContext) {
-        this.discoveryCallback = callbackContext;
+        // Send a success result to resolve the JavaScript promise
+        PluginResult successResult = new PluginResult(PluginResult.Status.OK, "Initialization successful");
+        successResult.setKeepCallback(true); // Keep the callback active
+        callbackContext.sendPluginResult(successResult);
     }
-
+    
     protected void clearCallback() {
         this.callback = null;
     }
 
-    protected void clearDiscoveryCallback() {
-        this.discoveryCallback = null;
-    }
-
-    protected void sendDiscoveryUpdate(JSONObject connectionJson, boolean keepCallback) {
-        Log.d(LOG_TAG, "sendDiscoveryUpdate");
-        if (this.discoveryCallback != null) {
-            PluginResult result = new PluginResult(PluginResult.Status.OK, connectionJson);
-            result.setKeepCallback(keepCallback);
-            this.discoveryCallback.sendPluginResult(result);
-        }
-    }
-
-    protected void handleGeneralUpdate(JSONObject result) {
-        PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, result);
-        pluginResult.setKeepCallback(true);
-        sendUpdateToJavascript(pluginResult);
-    }
-
-    private void sendUpdateToJavascript(PluginResult pluginResult) {
-        Log.d(LOG_TAG, "sendUpdate");
+    protected void broadcastEvent(JSONObject result) {
         if (this.callback != null) {
+            PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, result);
+            pluginResult.setKeepCallback(true);
             this.callback.sendPluginResult(pluginResult);
         }
     }

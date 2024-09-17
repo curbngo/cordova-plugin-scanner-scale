@@ -1,6 +1,6 @@
 {
   "name": "cordova-plugin-scanner-scale",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Cordova plugin for Scanners & Scales",
   "cordova": {
     "id": "cordova-plugin-scanner-scale",

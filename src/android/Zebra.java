@@ -72,14 +72,8 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         Log.d(LOG_TAG, "Zebra initialized with ScannerScale.");
     }
 
-    private boolean isConnected() {
+    public boolean isConnected() {
         return currentConnectedScannerID > -1;
-    }
-
-    public void isConnected(CallbackContext callbackContext) {
-        boolean isConnected = isConnected();
-        Log.d(LOG_TAG, "isConnected called. Result: " + isConnected);
-        callbackContext.success(isConnected ? 1 : 0);
     }
 
     public void initialize(CallbackContext callbackContext) {
@@ -202,7 +196,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
         if(isConnected() && listeningForWeight){
             stopWeightPolling();
         }
-        scannerScale.setCallback(callbackContext);
         scannerScale.cordova.getActivity().runOnUiThread(() -> {
             mScannerInfoList.clear();
             mSNAPIList.clear();
@@ -223,10 +216,13 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
             }
 
             if (!mSNAPIList.isEmpty()) {
-                Log.d(LOG_TAG, "device list size: "+mSNAPIList.size());
-                Log.d(LOG_TAG, "is active: "+mSNAPIList.get(0).isActive());
-                if (mSNAPIList.size() == 1 && mSNAPIList.get(0).isActive()) {
-                    currentConnectedScannerID = mSNAPIList.get(0).getScannerID();
+                int deviceCount = mSNAPIList.size();
+                DCSScannerInfo tempDevice = mSNAPIList.get(0);
+                boolean deviceIsActive = tempDevice.isActive();
+                Log.d(LOG_TAG, "device list size: "+deviceCount);
+                Log.d(LOG_TAG, "is active: "+deviceIsActive);
+                if (deviceCount == 1 && deviceIsActive) {
+                    currentConnectedScannerID = tempDevice.getScannerID();
                 } else {
                     for (DCSScannerInfo scanner : mSNAPIList) {
                         if (!scanner.isActive()) {
@@ -301,14 +297,14 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
             e.printStackTrace();
         }
         if (scannerScale != null) {
-            scannerScale.handleGeneralUpdate(result);
+            scannerScale.broadcastEvent(result);
         }
     }
 
     private void sendBarcodeScan(JSONObject barcodeJson) {
         Log.d(LOG_TAG, "sendBarcodeScan called");
         if (scannerScale != null) {
-            scannerScale.handleGeneralUpdate(barcodeJson);
+            scannerScale.broadcastEvent(barcodeJson);
         }
     }
 
@@ -319,7 +315,6 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
             sdkHandler.dcssdkTerminateCommunicationSession(currentConnectedScannerID);
             currentConnectedScannerID = -1;
             listeningForWeight = false;
-            scannerScale.clearCallback();
             Log.d(LOG_TAG, "Disconnected from scanner.");
         }
         callbackContext.success();
@@ -412,7 +407,7 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
     private void sendWeightUpdate(JSONObject weightJson) {
         Log.d(LOG_TAG, "sendWeightUpdate called with JSON: " + weightJson.toString());
         if (scannerScale != null) {
-            scannerScale.handleGeneralUpdate(weightJson);
+            scannerScale.broadcastEvent(weightJson);
         }
     }
 
@@ -432,7 +427,7 @@ public class Zebra implements ScannerScaleInterface, IDcsSdkApiDelegate {
             Log.e(LOG_TAG, "Error creating connection update JSON", e);
         }
         if (scannerScale != null) {
-            scannerScale.handleGeneralUpdate(result);
+            scannerScale.broadcastEvent(result);
         }
     }
 

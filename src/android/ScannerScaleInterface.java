@@ -8,7 +8,7 @@ public interface ScannerScaleInterface {
     void stopDiscovery(CallbackContext callbackContext);
     void connect(String id, CallbackContext callbackContext);
     void disconnect(CallbackContext callbackContext);
-    void isConnected(CallbackContext callbackContext);
+    boolean isConnected();
     void listen(CallbackContext callbackContext);
     void stopListening(CallbackContext callbackContext);
 }
