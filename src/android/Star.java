@@ -175,7 +175,7 @@ public class Star implements ScannerScaleInterface {
                     lastUnit = newUnit;
                     lastScaleDataJson = readScaleDataJson;
 
-                    if (listeningForWeight) {
+                    if (listeningForWeight || newWeight == 0.0) {
                         sendWeightUpdate(readScaleDataJson);
                         Log.d(LOG_TAG, "listening for weight, sending update");
                     } else {
