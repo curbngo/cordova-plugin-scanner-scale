@@ -97,6 +97,9 @@ public class Star implements ScannerScaleInterface {
 
     public void connect(final String id, final CallbackContext callbackContext) {
         Log.d(LOG_TAG, "connect");
+        lastWeight = null;
+        lastUnit = null;
+        lastScaleDataJson = null;
         scannerScale.cordova.getActivity().runOnUiThread(new Runnable() {
             public void run() {
                 Log.d(LOG_TAG, "connect on UI thread");
