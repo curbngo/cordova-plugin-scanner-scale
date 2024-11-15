@@ -17,6 +17,7 @@
 				<param name="android-package" value="scannerscale.cordova.ScannerScale"/>
 			</feature>
 		</config-file>
+		<framework src="plugin.gradle" custom="true" type="gradleReference"/>
 		<lib-file src="src/android/libs/zebrascannerscalesdk.aar" />
 		<source-file src="src/android/ScannerScaleInterface.java" target-dir="src/com/curbngo/scannerscale" />
 		<source-file src="src/android/ScannerScale.java" target-dir="src/com/curbngo/scannerscale" />
